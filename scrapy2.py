@@ -7,6 +7,8 @@ from selenium.webdriver.edge.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from sqlalchemy import create_engine
+import re
+from tables import *
 
 # PostgreSQL database connection parameters
 DB_USER = 'postgres'  
@@ -34,19 +36,21 @@ driver = webdriver.Edge(service=service, options=options)
 
 # Start timer for loading the website
 start_time = time.time()
-site = 'https://www.flashscore.com/'
 
-# Open the website
-driver.get("https://www.flashscore.com/basketball/serbia/first-league/results/")
+# List of basketball club URLs (replace this with your actual list of clubs)
+list_of_basketball_clubs = ['https://www.flashscore.com/basketball/serbia/first-league/results/']
+list_of_years_serbia = [2024, 2023, 2022]  # Replace with your years of interest
 
 # Function to extract team information from the webpage
-def get_team_info():
+def get_team_info(number):
     home_team = []
     away_team = []
     home_score = []
     away_score = []
-
+    date = []
+    count = 2024  # Year placeholder for current season
     matches = driver.find_elements(By.XPATH, '//div[contains(@class, "event__match")]')
+    
     for match in matches:
         try:
             home = match.find_element(By.XPATH, './/div[contains(@class, "participant--home")]').text
@@ -58,6 +62,7 @@ def get_team_info():
             away_team.append(away)
             home_score.append(home_score_value)
             away_score.append(away_score_value)
+            date.append(count)
         except Exception as e:
             print(f"Error extracting match data: {e}")
             continue
@@ -68,8 +73,10 @@ def get_team_info():
         'home_score': home_score,
         'away_score': away_score
     }
+    count -= int(number)  # Decrease the year count
     return team_info_dict
 
+# Function to extract table data
 def get_tables():
     table_position = []
     table_team = []
@@ -93,11 +100,6 @@ def get_tables():
     }
     return table_dict
 
-# Dummy lists for basketball clubs and years (replace with your actual lists)
-list_of_basketball_clubs = ['club1', 'club2']  # Replace with your actual data
-list_of_years = ['2023', '2024']  # Replace with your actual years
-list_of_url = ['/2011/1', '/2014/2']
-
 # Option to append DataFrames to the total_data list
 append_to_list = True  # Set this to False if you don't want to keep the DataFrames in memory
 
@@ -106,25 +108,33 @@ total_data = []
 
 # Loop over basketball clubs and years to gather match data
 for club in list_of_basketball_clubs:
-    for year in list_of_years:
-        try:
-            driver.get(club + f'/{year}')  # Adjust URL if needed
-            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'event__match')]")))
+    country_name = re.search(r'https://www\.flashscore\.com/basketball/([a-zA-Z\-]+)/', club)
+    if country_name:
+        country_name = country_name.group(1)
+    else:
+        print(f"Failed to extract country from URL: {club}")
+        continue
 
-            team_info = get_team_info()
+    for year in list_of_years_serbia:
+        try:
+            driver.get(f"{club}{year}")
+            WebDriverWait(driver, 60).until(EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'event__match')]")))
+
+            team_info = get_team_info(1)
 
             # Create the DataFrame
             df = pd.DataFrame(team_info)
 
             # Save the DataFrame to PostgreSQL as a table
-            table_name = f"basketball_scores_{club}_{year}"
+            table_name = f"basketball_scores_{country_name}_{year}"
             df.to_sql(table_name, engine, index=False, if_exists='replace')  # Replace existing table if needed
 
             # Optionally, append the DataFrame to the total_data list
             if append_to_list:
                 total_data.append(df)
         except Exception as e:
-            print(f"Error processing {club} for year {year}: {e}")
+            print(f"Error processing {country_name} for year {year}: {e}")
+            continue
 
 # Save the total_data combined DataFrame to PostgreSQL as a separate table
 if append_to_list and total_data:
@@ -134,10 +144,17 @@ if append_to_list and total_data:
 # Loop over basketball clubs and tables to gather table data
 total_data_table = []
 for club in list_of_basketball_clubs:
-    for table in list_of_url:
+    country_name = re.search(r'https://www\.flashscore\.com/basketball/([a-zA-Z\-]+)/', club)
+    if country_name:
+        country_name = country_name.group(1)
+    else:
+        print(f"Failed to extract country from URL: {club}")
+        continue
+
+    for table in list_of_years_serbia:
         try:
-            driver.get(club + f'{table}')
-            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'ui-table__body')]")))
+            driver.get(f"{club}{table}")
+            WebDriverWait(driver, 60).until(EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'ui-table__body')]")))
 
             table_info = get_tables()
 
@@ -153,6 +170,7 @@ for club in list_of_basketball_clubs:
                 total_data_table.append(df_table)
         except Exception as e:
             print(f"Error processing table {table} for club {club}: {e}")
+            continue
 
 # Save the total table data combined DataFrame to PostgreSQL as a separate table
 if append_to_list and total_data_table:

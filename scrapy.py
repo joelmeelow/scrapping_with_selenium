@@ -6,7 +6,7 @@ from selenium.webdriver.edge.service import Service
 from selenium.webdriver.edge.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-
+from tables import *
 # Specify the path to your msedgedriver if it's not in PATH
 edge_driver_path = r'C:\Users\user\Downloads\edgedriver_win64\msedgedriver.exe'
 
@@ -79,10 +79,7 @@ def get_tables():
     }
     return table_dict
 
-# Dummy lists for basketball clubs and years (replace with your actual lists)
-list_of_basketball_clubs = ['club1', 'club2']  # Replace with your actual data
-list_of_years = ['2023', '2024']  # Replace with your actual years
-list_of_url = ['/2011/1', '/2014/2']
+
 
 # Option to append DataFrames to the total_data list
 append_to_list = True  # Set this to False if you don't want to keep the DataFrames in memory
@@ -92,7 +89,7 @@ total_data = []
 
 # Loop over basketball clubs and years to gather match data
 for club in list_of_basketball_clubs:
-    for year in list_of_years:
+    for year in list_of_years_serbia:
         try:
             driver.get(club + f'/{year}')  # Adjust URL if needed
             WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'event__match')]")))
@@ -122,7 +119,7 @@ if append_to_list:
 # Loop over basketball clubs and tables to gather data
 total_data_table = []
 for club in list_of_basketball_clubs:
-    for table in list_of_url:
+    for table in table_url_serbia:
         try:
             driver.get(club + f'{table}')
             WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'ui-table__body')]")))
