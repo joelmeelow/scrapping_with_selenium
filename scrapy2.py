@@ -11,6 +11,8 @@ from selenium.webdriver.edge.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from sqlalchemy import create_engine
+import re
+from tables import *
 
 # =========================================
 # 1️⃣ Load DB credentials from .env
@@ -68,8 +70,8 @@ driver = webdriver.Edge(service=service, options=options)
 # =========================================
 # 4️⃣ Scraper functions
 # =========================================
-def get_team_info():
-    home_team, away_team, home_score, away_score = [], [], [], []
+def get_team_info(year):
+    home_team, away_team, home_score, away_score, date = [], [], [], [], []
     matches = driver.find_elements(By.XPATH, '//div[contains(@class, "event__match")]')
     for match in matches:
         try:
@@ -81,13 +83,15 @@ def get_team_info():
             away_team.append(away)
             home_score.append(home_score_value)
             away_score.append(away_score_value)
+            date.append(year)
         except Exception as e:
             print(f"Error extracting match data: {e}")
     return pd.DataFrame({
         'home_team': home_team,
         'away_team': away_team,
         'home_score': home_score,
-        'away_score': away_score
+        'away_score': away_score,
+        'season_year': date
     })
 
 def get_tables():
@@ -112,10 +116,17 @@ def get_tables():
 leagues = {
     "serbia": {
         "base_url": "https://www.flashscore.com/basketball/serbia/",
-        "years": ['first-league/results/','first-league-2023-2024/results/','first-league-2022-2023/results/'],
-        "tables": ['first-league-2023-2024/#/fPB68otI/table/overall','first-league-2022-2023/#/UgOzMRKQ/table/overall']
+        "years": [
+            ('first-league/results/', 2024),
+            ('first-league-2023-2024/results/', 2023),
+            ('first-league-2022-2023/results/', 2022)
+        ],
+        "tables": [
+            'first-league-2023-2024/#/fPB68otI/table/overall',
+            'first-league-2022-2023/#/UgOzMRKQ/table/overall'
+        ]
     },
-    # Add other leagues here in same format...
+    # Add other leagues here...
 }
 
 # =========================================
@@ -130,11 +141,11 @@ for league_name, league_data in leagues.items():
     base_url = league_data["base_url"]
 
     # Matches
-    for year_path in league_data["years"]:
+    for year_path, year_val in league_data["years"]:
         try:
             driver.get(base_url + year_path)
             WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'event__match')]")))
-            df = get_team_info()
+            df = get_team_info(year_val)
             df.to_sql(f"{league_name}_matches_{year_path.replace('/', '_')}", engine, index=False, if_exists='replace')
             if append_to_list:
                 all_matches.append(df)
