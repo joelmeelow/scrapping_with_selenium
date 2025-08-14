@@ -1,5 +1,9 @@
+import os
 import time
 import pandas as pd
+import shutil
+import subprocess
+from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.edge.service import Service
@@ -8,44 +12,64 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from sqlalchemy import create_engine
 
-# PostgreSQL database connection parameters
-DB_USER = 'postgres'  
-DB_PASSWORD = '16a9j63p' 
-DB_HOST = 'localhost'
-DB_PORT = '5432'  
-DB_NAME = 'sportdata'  
-
-# Create connection URL for SQLAlchemy
+# =========================================
+# 1️⃣ Load DB credentials from .env
+# =========================================
+load_dotenv()
+DB_USER = os.getenv('DB_USER', 'postgres')
+DB_PASSWORD = os.getenv('DB_PASSWORD', '')
+DB_HOST = os.getenv('DB_HOST', 'localhost')
+DB_PORT = os.getenv('DB_PORT', '5432')
+DB_NAME = os.getenv('DB_NAME', 'sportdata')
 DATABASE_URL = f'postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}'
-
-# Set up the SQLAlchemy engine
 engine = create_engine(DATABASE_URL)
 
-# Specify the path to your msedgedriver if it's not in PATH
+# =========================================
+# 2️⃣ Check Edge & EdgeDriver version match
+# =========================================
+def check_driver_version():
+    edge_path = shutil.which("msedge") or r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+    try:
+        edge_version = subprocess.check_output([edge_path, "--version"], text=True).strip()
+    except Exception:
+        edge_version = "Unknown"
+
+    driver_path = shutil.which("msedgedriver")
+    driver_version = "Unknown"
+    if driver_path:
+        try:
+            driver_version = subprocess.check_output([driver_path, "--version"], text=True).strip()
+        except Exception:
+            pass
+
+    print(f"Edge Version: {edge_version}")
+    print(f"EdgeDriver Version: {driver_version}")
+    if driver_version != "Unknown" and edge_version.split()[1].split('.')[0] != driver_version.split()[1].split('.')[0]:
+        print("⚠️ Edge and EdgeDriver versions may not match. Download matching driver here: https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/")
+
+check_driver_version()
+
+# =========================================
+# 3️⃣ Set up Edge options (SSL ignore + stealth)
+# =========================================
 edge_driver_path = r'C:\Users\user\Downloads\edgedriver_win64\msedgedriver.exe'
-
-# Initialize the WebDriver options for Edge
 options = Options()
-options.use_chromium = True  # This is required for Edge to work properly
+options.use_chromium = True
+options.add_argument('--ignore-certificate-errors')
+options.add_argument('--ignore-ssl-errors')
+options.add_argument("--disable-blink-features=AutomationControlled")
+options.add_argument("--start-maximized")
+options.add_argument("--no-sandbox")
+options.add_argument("--disable-dev-shm-usage")
 
-# Initialize the Edge WebDriver
 service = Service(executable_path=edge_driver_path)
 driver = webdriver.Edge(service=service, options=options)
 
-# Start timer for loading the website
-start_time = time.time()
-site = 'https://www.flashscore.com/'
-
-# Open the website
-driver.get("https://www.flashscore.com/basketball/serbia/first-league/results/")
-
-# Function to extract team information from the webpage
+# =========================================
+# 4️⃣ Scraper functions
+# =========================================
 def get_team_info():
-    home_team = []
-    away_team = []
-    home_score = []
-    away_score = []
-
+    home_team, away_team, home_score, away_score = [], [], [], []
     matches = driver.find_elements(By.XPATH, '//div[contains(@class, "event__match")]')
     for match in matches:
         try:
@@ -53,120 +77,87 @@ def get_team_info():
             away = match.find_element(By.XPATH, './/div[contains(@class, "event__participant--away")]').text
             home_score_value = match.find_element(By.XPATH, './/div[contains(@class, "event__score--home")]').text
             away_score_value = match.find_element(By.XPATH, './/div[contains(@class, "event__score--away")]').text
-
             home_team.append(home)
             away_team.append(away)
             home_score.append(home_score_value)
             away_score.append(away_score_value)
         except Exception as e:
             print(f"Error extracting match data: {e}")
-            continue
-
-    team_info_dict = {
+    return pd.DataFrame({
         'home_team': home_team,
         'away_team': away_team,
         'home_score': home_score,
         'away_score': away_score
-    }
-    return team_info_dict
+    })
 
 def get_tables():
-    table_position = []
-    table_team = []
-
+    table_position, table_team = [], []
     tables = driver.find_elements(By.XPATH, '//div[contains(@class, "ui-table__body")]')
-
     for table in tables:
         try:
             position = table.find_elements(By.XPATH, './/div[contains(@class, "ui-table__row")]/div[contains(@class, "table__cell--rank")]')
             team_name = table.find_elements(By.XPATH, './/div[contains(@class, "ui-table__row")]/div[contains(@class, "table__cell--participant")]/a')
-
             table_position.extend([p.text for p in position])
             table_team.extend([t.text for t in team_name])
         except Exception as e:
             print(f"Error extracting table data: {e}")
-            continue
-
-    table_dict = {
+    return pd.DataFrame({
         'position': table_position,
         'team_name': table_team
-    }
-    return table_dict
+    })
 
-# Dummy lists for basketball clubs and years (replace with your actual lists)
-list_of_basketball_clubs = ['club1', 'club2']  # Replace with your actual data
-list_of_years = ['2023', '2024']  # Replace with your actual years
-list_of_url = ['/2011/1', '/2014/2']
+# =========================================
+# 5️⃣ League data structure
+# =========================================
+leagues = {
+    "serbia": {
+        "base_url": "https://www.flashscore.com/basketball/serbia/",
+        "years": ['first-league/results/','first-league-2023-2024/results/','first-league-2022-2023/results/'],
+        "tables": ['first-league-2023-2024/#/fPB68otI/table/overall','first-league-2022-2023/#/UgOzMRKQ/table/overall']
+    },
+    # Add other leagues here in same format...
+}
 
-# Option to append DataFrames to the total_data list
-append_to_list = True  # Set this to False if you don't want to keep the DataFrames in memory
+# =========================================
+# 6️⃣ Main scraping loop
+# =========================================
+start_time = time.time()
+append_to_list = True
+all_matches = []
+all_tables = []
 
-# List to store DataFrames if needed
-total_data = []
+for league_name, league_data in leagues.items():
+    base_url = league_data["base_url"]
 
-# Loop over basketball clubs and years to gather match data
-for club in list_of_basketball_clubs:
-    for year in list_of_years:
+    # Matches
+    for year_path in league_data["years"]:
         try:
-            driver.get(club + f'/{year}')  # Adjust URL if needed
-            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'event__match')]")))
-
-            team_info = get_team_info()
-
-            # Create the DataFrame
-            df = pd.DataFrame(team_info)
-
-            # Save the DataFrame to PostgreSQL as a table
-            table_name = f"basketball_scores_{club}_{year}"
-            df.to_sql(table_name, engine, index=False, if_exists='replace')  # Replace existing table if needed
-
-            # Optionally, append the DataFrame to the total_data list
+            driver.get(base_url + year_path)
+            WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'event__match')]")))
+            df = get_team_info()
+            df.to_sql(f"{league_name}_matches_{year_path.replace('/', '_')}", engine, index=False, if_exists='replace')
             if append_to_list:
-                total_data.append(df)
+                all_matches.append(df)
         except Exception as e:
-            print(f"Error processing {club} for year {year}: {e}")
+            print(f"Error processing matches for {league_name} - {year_path}: {e}")
 
-# Save the total_data combined DataFrame to PostgreSQL as a separate table
-if append_to_list and total_data:
-    concatenated_df = pd.concat(total_data, ignore_index=True)
-    concatenated_df.to_sql('total_basketball_scores', engine, index=False, if_exists='replace')
-
-# Loop over basketball clubs and tables to gather table data
-total_data_table = []
-for club in list_of_basketball_clubs:
-    for table in list_of_url:
+    # Tables
+    for table_path in league_data["tables"]:
         try:
-            driver.get(club + f'{table}')
-            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'ui-table__body')]")))
-
-            table_info = get_tables()
-
-            # Create the DataFrame for table data
-            df_table = pd.DataFrame(table_info)
-
-            # Save the DataFrame to PostgreSQL as a table
-            table_name = f"basketball_table_{club}_{table.replace('/', '_')}"
-            df_table.to_sql(table_name, engine, index=False, if_exists='replace')
-
-            # Optionally, append the DataFrame to the total_data_table list
+            driver.get(base_url + table_path)
+            WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'ui-table__body')]")))
+            df_table = get_tables()
+            df_table.to_sql(f"{league_name}_table_{table_path.replace('/', '_')}", engine, index=False, if_exists='replace')
             if append_to_list:
-                total_data_table.append(df_table)
+                all_tables.append(df_table)
         except Exception as e:
-            print(f"Error processing table {table} for club {club}: {e}")
+            print(f"Error processing table for {league_name} - {table_path}: {e}")
 
-# Save the total table data combined DataFrame to PostgreSQL as a separate table
-if append_to_list and total_data_table:
-    concatenated_df_table = pd.concat(total_data_table, ignore_index=True)
-    concatenated_df_table.to_sql('total_basketball_tables', engine, index=False, if_exists='replace')
+# Save combined tables
+if append_to_list and all_matches:
+    pd.concat(all_matches, ignore_index=True).to_sql('all_leagues_matches', engine, index=False, if_exists='replace')
+if append_to_list and all_tables:
+    pd.concat(all_tables, ignore_index=True).to_sql('all_leagues_tables', engine, index=False, if_exists='replace')
 
-# Duration to keep the browser open (optional)
-duration_to_keep_open = 60  # Adjust as needed (1 minute for testing)
-time.sleep(duration_to_keep_open)
-
-# Stop timer
-end_time = time.time()
-total_duration = end_time - start_time
-print(f"Time taken to open the website and keep it open: {total_duration:.2f} seconds")
-
-# Close the driver
+print(f"✅ Done in {time.time() - start_time:.2f} seconds")
 driver.quit()
